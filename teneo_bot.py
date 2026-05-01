@@ -12,6 +12,7 @@ Usage:
   python teneo_bot.py                  # run with .env config
   python teneo_bot.py --requests 100   # override target requests
   python teneo_bot.py --delay 3        # set delay between requests (seconds)
+  python teneo_bot.py --agent crypto-tracker-ai-v2
 """
 
 import asyncio
@@ -20,10 +21,10 @@ import os
 import sys
 import time
 import random
+import string
 import argparse
 import signal
 from datetime import datetime
-from pathlib import Path
 
 try:
     import websockets
@@ -40,28 +41,67 @@ load_dotenv()
 
 # ─── CONFIG ────────────────────────────────────────────────────────────────────
 
+WS_URL   = "wss://backend.developer.chatroom.teneo-protocol.ai/ws"
+API_BASE = "https://backend.developer.chatroom.teneo-protocol.ai"
+
 DEFAULT_CONFIG = {
-    "SESSION_KEY":    os.getenv("TENEO_SESSION_KEY", ""),
-    "TARGET_REQUESTS": int(os.getenv("TENEO_TARGET_REQUESTS", "50")),
-    "DELAY_SECONDS":   float(os.getenv("TENEO_DELAY_SECONDS", "2")),
-    "AGENT_ID":        os.getenv("TENEO_AGENT_ID", ""),          # optional: target a specific agent
-    "WS_URL":          os.getenv("TENEO_WS_URL", "wss://api.teneo-protocol.ai/ws"),
-    "API_BASE":        os.getenv("TENEO_API_BASE", "https://api.teneo-protocol.ai"),
+    "SESSION_KEY":      os.getenv("TENEO_SESSION_KEY", ""),
+    "WALLET_ADDRESS":   os.getenv("TENEO_WALLET_ADDRESS", ""),
+    "TARGET_REQUESTS":  int(os.getenv("TENEO_TARGET_REQUESTS", "50")),
+    "DELAY_SECONDS":    float(os.getenv("TENEO_DELAY_SECONDS", "3")),
+    "AGENT_ID":         os.getenv("TENEO_AGENT_ID", ""),
 }
 
-# Prompts to cycle through when sending requests
-SAMPLE_PROMPTS = [
-    "What can you help me with?",
-    "Give me a brief summary of your capabilities.",
-    "What tasks are you best suited for?",
-    "Tell me something interesting.",
-    "What's the latest update on Teneo Protocol?",
-    "How does the x402 payment protocol work?",
-    "Explain agent monetization in one sentence.",
-    "What blockchain networks does Teneo support?",
-    "How do session keys improve user experience?",
-    "What is the Teneo Agent Console?",
+# Agent IDs yang tersedia
+KNOWN_AGENTS = [
+    "crypto-tracker-ai-v2",    # Crypto Tracker — murah, recommended
+    "trading-knowledge-agent",  # Trading Agent
+    "gas-sniper-agent",         # Gas War Sniper
+    "amazon",                   # Amazon
+    "x-agent-enterprise-v2",   # X Platform Agent (lebih mahal)
 ]
+
+# Commands per agent — pilih yang paling murah
+AGENT_COMMANDS = {
+    "crypto-tracker-ai-v2": [
+        "price BTC",
+        "price ETH",
+        "price PEAQ",
+        "price SOL",
+        "price BNB",
+        "price AVAX",
+        "price MATIC",
+        "price ARB",
+        "price OP",
+        "price LINK",
+    ],
+    "trading-knowledge-agent": [
+        "What is DCA strategy?",
+        "Explain support and resistance.",
+        "What is RSI indicator?",
+        "What is MACD?",
+        "Explain bollinger bands.",
+        "What is a stop loss?",
+        "Explain market cap.",
+        "What is liquidity?",
+        "Explain order book.",
+        "What is slippage?",
+    ],
+    "x-agent-enterprise-v2": [
+        "user elonmusk",
+        "user VitalikButerin",
+        "user cz_binance",
+        "user naval",
+        "user balajis",
+    ],
+    "default": [
+        "price BTC",
+        "price ETH",
+        "price SOL",
+        "price BNB",
+        "price AVAX",
+    ],
+}
 
 # ─── HELPERS ────────────────────────────────────────────────────────────────────
 
@@ -78,199 +118,237 @@ def log_err(msg):   log(msg, Fore.RED,     "✗")
 def log_req(msg):   log(msg, Fore.MAGENTA, "→")
 def log_res(msg):   log(msg, Fore.WHITE,   "←")
 
-def print_banner():
-    banner = f"""
-{Fore.GREEN}╔══════════════════════════════════════════════════╗
-║{Fore.YELLOW}        TENEO AGENT BOT  ·  Quest Automation       {Fore.GREEN}║
-║{Fore.WHITE}    Auto-runs Agent requests to earn points        {Fore.GREEN}║
-╚══════════════════════════════════════════════════╝{Style.RESET_ALL}
-"""
-    print(banner)
+def gen_msg_id():
+    """Generate WebSocket message ID: ws-XXXXXXXXXXXXXXXXXXXX"""
+    chars = string.ascii_letters + string.digits
+    return "ws-" + "".join(random.choices(chars, k=20))
 
-def print_config(cfg):
-    has_key = bool(cfg["SESSION_KEY"])
-    key_display = cfg["SESSION_KEY"][:8] + "..." if has_key else f"{Fore.RED}NOT SET"
-    print(f"  {Fore.CYAN}Session Key    {Fore.WHITE}{key_display}")
-    print(f"  {Fore.CYAN}Target Reqs    {Fore.YELLOW}{cfg['TARGET_REQUESTS']}")
-    print(f"  {Fore.CYAN}Delay          {Fore.WHITE}{cfg['DELAY_SECONDS']}s between requests")
-    print(f"  {Fore.CYAN}Agent ID       {Fore.WHITE}{cfg['AGENT_ID'] or 'auto-discover'}")
-    print()
-
-def progress_bar(current, total, width=30):
+def progress_bar(current, total, width=28):
     filled = int(width * current / max(total, 1))
     bar = "█" * filled + "░" * (width - filled)
     pct = int(100 * current / max(total, 1))
     return f"{Fore.GREEN}{bar}{Style.RESET_ALL} {Fore.YELLOW}{pct}%{Style.RESET_ALL} ({current}/{total})"
 
+def print_banner():
+    print(f"""
+{Fore.GREEN}╔══════════════════════════════════════════════════╗
+║{Fore.YELLOW}        TENEO AGENT BOT  ·  Quest Automation       {Fore.GREEN}║
+║{Fore.WHITE}    WebSocket · agent-console.ai · Real Requests  {Fore.GREEN}║
+╚══════════════════════════════════════════════════╝{Style.RESET_ALL}""")
+
+def print_config(cfg, agent_id, room_id):
+    wallet = cfg["WALLET_ADDRESS"]
+    key    = cfg["SESSION_KEY"]
+    w_disp = f"{wallet[:10]}...{wallet[-6:]}" if len(wallet) > 16 else wallet
+    k_disp = f"{key[:10]}...{key[-6:]}"       if len(key) > 16    else key
+    print(f"  {Fore.CYAN}Wallet         {Fore.WHITE}{w_disp}")
+    print(f"  {Fore.CYAN}Session Key    {Fore.WHITE}{k_disp}")
+    print(f"  {Fore.CYAN}Agent          {Fore.YELLOW}{agent_id}")
+    print(f"  {Fore.CYAN}Room           {Fore.WHITE}{room_id or 'none'}")
+    print(f"  {Fore.CYAN}Target         {Fore.YELLOW}{cfg['TARGET_REQUESTS']} requests")
+    print(f"  {Fore.CYAN}Delay          {Fore.WHITE}{cfg['DELAY_SECONDS']}s + jitter")
+    print()
+
 # ─── CORE BOT ───────────────────────────────────────────────────────────────────
 
 class TeneoBot:
     def __init__(self, config):
-        self.cfg = config
+        self.cfg         = config
         self.session_key = config["SESSION_KEY"]
-        self.target = config["TARGET_REQUESTS"]
-        self.delay = config["DELAY_SECONDS"]
-        self.agent_id = config["AGENT_ID"]
-        self.ws_url = config["WS_URL"]
-        self.api_base = config["API_BASE"]
+        self.wallet      = config["WALLET_ADDRESS"]
+        self.target      = config["TARGET_REQUESTS"]
+        self.delay       = config["DELAY_SECONDS"]
+        self.agent_id    = config["AGENT_ID"] or ""
 
-        self.count = 0
-        self.points = 0
-        self.errors = 0
-        self.running = False
+        self.count      = 0
+        self.errors     = 0
+        self.running    = False
         self.start_time = None
-        self.ws = None
+        self.ws         = None
+        self.room_id    = None
 
-    async def discover_agent(self, session):
-        """Fetch first available public agent from Agent Console."""
-        try:
-            url = f"{self.api_base}/v1/agents?limit=5&status=public"
-            headers = {"Authorization": f"Bearer {self.session_key}"}
-            async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=10)) as r:
-                if r.status == 200:
-                    data = await r.json()
-                    agents = data.get("agents") or data.get("data") or []
-                    if agents:
-                        aid = agents[0].get("id") or agents[0].get("agentId")
-                        log_ok(f"Discovered agent: {aid}")
-                        return aid
-        except Exception as e:
-            log_warn(f"Agent discovery failed: {e}")
-        return None
-
-    async def send_request_http(self, session, prompt):
-        """Send a single agent request via HTTP API."""
-        url = f"{self.api_base}/v1/agents/{self.agent_id}/chat"
-        headers = {
-            "Authorization": f"Bearer {self.session_key}",
-            "Content-Type":  "application/json",
-            "User-Agent":    "TeneoBot/1.0",
-        }
-        payload = {
-            "message": prompt,
-            "sessionKey": self.session_key,
-        }
-        async with session.post(
-            url, headers=headers, json=payload,
-            timeout=aiohttp.ClientTimeout(total=30)
-        ) as r:
-            body = await r.json()
-            if r.status in (200, 201):
-                pts = body.get("pointsEarned") or body.get("points") or 0
-                return True, pts, body.get("response", "")[:80]
-            else:
-                return False, 0, body.get("error", f"HTTP {r.status}")
-
-    async def send_request_ws(self, prompt):
-        """Send a single agent request via WebSocket."""
-        if not self.ws or self.ws.closed:
-            raise ConnectionError("WebSocket not connected")
-        msg = json.dumps({
-            "type":      "task",
-            "agentId":   self.agent_id,
-            "message":   prompt,
-            "sessionKey": self.session_key,
-        })
-        await self.ws.send(msg)
-        # wait for response with timeout
-        raw = await asyncio.wait_for(self.ws.recv(), timeout=20)
-        data = json.loads(raw)
-        if data.get("type") == "task_result":
-            pts = data.get("pointsEarned") or 0
-            return True, pts, str(data.get("result", ""))[:80]
-        return False, 0, str(data)
-
-    async def connect_ws(self):
-        """Establish WebSocket connection with auth."""
-        headers = {"Authorization": f"Bearer {self.session_key}"}
-        url = f"{self.ws_url}?sessionKey={self.session_key}"
-        log_info("Connecting via WebSocket...")
+    # ── WS: Connect ───────────────────────────────────────────────────────────
+    async def connect(self):
+        log_info("Connecting to WebSocket...")
         self.ws = await websockets.connect(
-            url,
-            additional_headers=headers,
+            WS_URL,
             ping_interval=20,
-            ping_timeout=10,
+            ping_timeout=15,
+            open_timeout=15,
         )
         log_ok("WebSocket connected")
 
+        # Tunggu welcome message (server kirim list agents)
+        try:
+            raw = await asyncio.wait_for(self.ws.recv(), timeout=10)
+            data = json.loads(raw)
+            if data.get("type") == "agents":
+                agents = data.get("data", [])
+                log_ok(f"Server: {len(agents)} agent(s) available")
+
+                # Auto-pilih agent kalau belum diset
+                if not self.agent_id:
+                    self.agent_id = self._pick_agent(agents)
+
+                # Ambil room_id untuk agent yang dipilih
+                for a in agents:
+                    if a.get("id") == self.agent_id:
+                        rooms = a.get("rooms", [])
+                        if rooms:
+                            self.room_id = rooms[0]
+                        break
+
+        except asyncio.TimeoutError:
+            log_warn("No welcome message, continuing anyway...")
+
+        log_info(f"Agent  : {Fore.YELLOW}{self.agent_id}")
+        log_info(f"Room   : {self.room_id or 'none'}")
+
+    def _pick_agent(self, agents):
+        """Pilih agent online termurah."""
+        online_ids = {a.get("id") for a in agents if a.get("status") == "online"}
+        for preferred in KNOWN_AGENTS:
+            if preferred in online_ids:
+                return preferred
+        # Fallback: agent pertama yang online
+        for a in agents:
+            if a.get("status") == "online":
+                return a.get("id", "crypto-tracker-ai-v2")
+        return "crypto-tracker-ai-v2"
+
+    # ── WS: Kirim 1 request ───────────────────────────────────────────────────
+    async def send_request(self, command):
+        msg_id = gen_msg_id()
+
+        payload = {
+            "type":       "task",
+            "id":         msg_id,
+            "from":       self.wallet,
+            "to":         self.agent_id,
+            "roomId":     self.room_id,
+            "sessionKey": self.session_key,
+            "data": {
+                "command": command,
+            },
+            "timestamp": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z",
+        }
+
+        await self.ws.send(json.dumps(payload))
+
+        # Tunggu response
+        deadline = time.time() + 30
+        while time.time() < deadline:
+            try:
+                raw = await asyncio.wait_for(self.ws.recv(), timeout=10)
+                data = json.loads(raw)
+                t = data.get("type", "")
+
+                # Response untuk request kita
+                if data.get("id") == msg_id:
+                    if t in ("task_result", "result", "response", "task_complete"):
+                        result = data.get("data", {})
+                        return True, str(result)[:100]
+                    if t == "error":
+                        err = data.get("data", {})
+                        return False, str(err.get("message", err))[:100]
+
+                # Pesan lain — skip
+            except asyncio.TimeoutError:
+                break
+
+        return False, "Timeout"
+
+    # ── Reconnect ─────────────────────────────────────────────────────────────
+    async def ensure_connected(self):
+        if self.ws is None or self.ws.closed:
+            log_warn("Disconnected, reconnecting...")
+            await asyncio.sleep(2)
+            await self.connect()
+
+    # ── Main loop ─────────────────────────────────────────────────────────────
     async def run(self):
-        self.running = True
+        self.running    = True
         self.start_time = time.time()
 
         print_banner()
 
-        # Validate session key
         if not self.session_key:
-            log_err("SESSION_KEY is not set!")
-            log_warn("Create a .env file with TENEO_SESSION_KEY=your_key")
-            log_warn("Get your Session Key from: https://agent-console.ai")
+            log_err("TENEO_SESSION_KEY belum diset!")
+            log_warn("Edit .env → isi TENEO_SESSION_KEY=...")
+            log_warn("Dapatkan dari: https://agent-console.ai")
+            sys.exit(1)
+
+        if not self.wallet:
+            log_warn("TENEO_WALLET_ADDRESS tidak diset")
+            log_warn("Tambahkan TENEO_WALLET_ADDRESS=0x... di .env")
             sys.exit(1)
 
         log_info("Starting Teneo Agent Bot...")
-        print_config(self.cfg)
 
-        async with aiohttp.ClientSession() as http_session:
-            # Discover agent if not set
-            if not self.agent_id:
-                self.agent_id = await self.discover_agent(http_session)
-                if not self.agent_id:
-                    log_warn("Could not auto-discover agent. Set TENEO_AGENT_ID in .env")
-                    log_warn("Using fallback generic endpoint...")
-                    self.agent_id = "default"
+        try:
+            await self.connect()
+        except Exception as e:
+            log_err(f"Gagal connect: {e}")
+            sys.exit(1)
 
-            log_info(f"Target: {self.target} requests  |  Agent: {self.agent_id}")
-            log_info("Press Ctrl+C to stop at any time.\n")
+        print_config(self.cfg, self.agent_id, self.room_id)
+        log_info("Tekan Ctrl+C untuk berhenti.\n")
 
-            prompt_cycle = 0
+        commands = AGENT_COMMANDS.get(self.agent_id, AGENT_COMMANDS["default"])
+        cmd_cycle          = 0
+        consecutive_errors = 0
 
-            while self.count < self.target and self.running:
-                prompt = SAMPLE_PROMPTS[prompt_cycle % len(SAMPLE_PROMPTS)]
-                prompt_cycle += 1
+        while self.count < self.target and self.running:
+            command = commands[cmd_cycle % len(commands)]
+            cmd_cycle += 1
+            req_num = self.count + 1
 
-                req_num = self.count + 1
-                log_req(f"[{req_num:>3}/{self.target}] Sending: \"{prompt}\"")
+            log_req(f"[{req_num:>3}/{self.target}] \"{command}\"")
 
-                try:
-                    success, pts, reply = await self.send_request_http(http_session, prompt)
+            try:
+                await self.ensure_connected()
+                success, reply = await self.send_request(command)
 
-                    if success:
-                        self.count += 1
-                        self.points += pts
-                        elapsed = time.time() - self.start_time
-                        rate = self.count / elapsed * 60 if elapsed > 0 else 0
-                        pts_str = f"+{pts} pts" if pts else "✓"
-                        log_ok(f"Done  {pts_str}  |  {progress_bar(self.count, self.target)}  |  {rate:.1f} req/min")
-                        if reply:
-                            log_res(f"Response: {reply}...")
-                    else:
-                        self.errors += 1
-                        log_err(f"Request failed: {reply}")
-                        if self.errors >= 5:
-                            log_err("Too many consecutive errors. Check your session key.")
-                            break
-
-                except aiohttp.ClientConnectionError as e:
-                    self.errors += 1
-                    log_err(f"Connection error: {e}")
-                    log_warn("Retrying in 5s...")
-                    await asyncio.sleep(5)
-                    continue
-
-                except asyncio.TimeoutError:
-                    self.errors += 1
-                    log_warn("Request timed out. Retrying...")
+                if success:
+                    self.count        += 1
+                    consecutive_errors = 0
+                    elapsed = time.time() - self.start_time
+                    rate    = self.count / elapsed * 60 if elapsed > 0 else 0
+                    log_ok(f"{progress_bar(self.count, self.target)}  {rate:.1f} req/min")
+                    if reply and reply not in ("{}", ""):
+                        log_res(reply[:80])
+                else:
+                    consecutive_errors += 1
+                    self.errors        += 1
+                    log_err(f"Failed: {reply}")
+                    if consecutive_errors >= 5:
+                        log_err("5 error berturut-turut. Cek session key / saldo USDC.")
+                        break
                     await asyncio.sleep(3)
                     continue
 
+            except websockets.exceptions.ConnectionClosed:
+                log_warn("Connection closed, reconnecting...")
+                await asyncio.sleep(3)
+                try:
+                    await self.connect()
                 except Exception as e:
-                    self.errors += 1
-                    log_err(f"Unexpected error: {e}")
-                    await asyncio.sleep(2)
-                    continue
+                    log_err(f"Reconnect gagal: {e}")
+                    break
+                continue
 
-                # Jitter delay to avoid rate limits
-                jitter = random.uniform(0.5, 1.5)
-                await asyncio.sleep(self.delay * jitter)
+            except Exception as e:
+                consecutive_errors += 1
+                self.errors        += 1
+                log_err(f"Error: {e}")
+                await asyncio.sleep(2)
+                continue
+
+            jitter = random.uniform(0.5, 1.5)
+            await asyncio.sleep(self.delay * jitter)
+
+        if self.ws and not self.ws.closed:
+            await self.ws.close()
 
         self.print_summary()
 
@@ -284,20 +362,19 @@ class TeneoBot:
         print(f"{Fore.YELLOW}  SESSION COMPLETE{Style.RESET_ALL}")
         print(f"{Fore.GREEN}{'═'*52}{Style.RESET_ALL}")
         print(f"  {Fore.CYAN}Requests sent   {Fore.WHITE}{self.count} / {self.target}")
-        print(f"  {Fore.CYAN}Points earned   {Fore.YELLOW}{self.points:,}")
         print(f"  {Fore.CYAN}Errors          {Fore.RED if self.errors else Fore.GREEN}{self.errors}")
         print(f"  {Fore.CYAN}Duration        {Fore.WHITE}{mins}m {secs}s")
         print(f"  {Fore.CYAN}Avg rate        {Fore.WHITE}{rate:.1f} req/min")
         print(f"{Fore.GREEN}{'═'*52}{Style.RESET_ALL}\n")
 
         if self.count >= self.target:
-            print(f"  {Fore.GREEN}✓ Quest target reached! Check Dashboard for points.{Style.RESET_ALL}")
-            print(f"    Dashboard → {Fore.CYAN}https://go.teneo-protocol.ai/4d2Xipw{Style.RESET_ALL}\n")
+            print(f"  {Fore.GREEN}✓ Target tercapai! Cek Dashboard untuk points.{Style.RESET_ALL}")
+            print(f"    {Fore.CYAN}https://go.teneo-protocol.ai/4d2Xipw{Style.RESET_ALL}\n")
         else:
-            print(f"  {Fore.YELLOW}⚠  Stopped early ({self.count}/{self.target} requests){Style.RESET_ALL}\n")
+            print(f"  {Fore.YELLOW}⚠  Berhenti di {self.count}/{self.target} requests{Style.RESET_ALL}\n")
 
     def stop(self):
-        log_warn("Stopping bot...")
+        log_warn("Stopping...")
         self.running = False
 
 
@@ -305,19 +382,25 @@ class TeneoBot:
 
 def parse_args():
     p = argparse.ArgumentParser(
-        description="Teneo Agent Bot — Auto-run agent requests for quest points",
+        description="Teneo Agent Bot — WebSocket CLI runner",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
-Examples:
+Agents tersedia:
+  crypto-tracker-ai-v2     Crypto price (termurah, recommended)
+  trading-knowledge-agent  Trading knowledge
+  gas-sniper-agent         Gas war sniper
+  x-agent-enterprise-v2   X/Twitter (lebih mahal)
+
+Contoh:
   python teneo_bot.py
   python teneo_bot.py --requests 100
-  python teneo_bot.py --requests 25 --delay 3
-  TENEO_SESSION_KEY=abc123 python teneo_bot.py
+  python teneo_bot.py --agent crypto-tracker-ai-v2 --requests 100
+  python teneo_bot.py --requests 25 --delay 5
         """,
     )
-    p.add_argument("--requests", type=int,   help="Number of requests to send (default: 50)")
-    p.add_argument("--delay",    type=float, help="Seconds between requests (default: 2)")
-    p.add_argument("--agent",    type=str,   help="Agent ID to target")
+    p.add_argument("--requests", type=int,   help="Jumlah requests (default: 50)")
+    p.add_argument("--delay",    type=float, help="Delay antar request (detik, default: 3)")
+    p.add_argument("--agent",    type=str,   help="Agent ID")
     return p.parse_args()
 
 
@@ -331,13 +414,12 @@ async def main():
 
     bot = TeneoBot(config)
 
-    # Graceful shutdown on Ctrl+C
     loop = asyncio.get_event_loop()
     for sig in (signal.SIGINT, signal.SIGTERM):
         try:
             loop.add_signal_handler(sig, bot.stop)
         except (NotImplementedError, ValueError):
-            pass  # Windows fallback
+            pass
 
     try:
         await bot.run()
