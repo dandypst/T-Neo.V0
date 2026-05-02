@@ -52,8 +52,9 @@ WS_URL = "wss://backend.developer.chatroom.teneo-protocol.ai/ws"
 # ─── CONFIG ────────────────────────────────────────────────────────────────────
 
 DEFAULT_CONFIG = {
-    "SESSION_KEY":     os.getenv("TENEO_SESSION_KEY", ""),       # private key 0x...
-    "WALLET_ADDRESS":  os.getenv("TENEO_WALLET_ADDRESS", ""),    # wallet address 0x...
+    "SESSION_KEY":     os.getenv("TENEO_SESSION_KEY", ""),
+    "SESSION_TOKEN":   os.getenv("TENEO_SESSION_TOKEN", ""),   # dari browser
+    "WALLET_ADDRESS":  os.getenv("TENEO_WALLET_ADDRESS", ""),
     "TARGET_REQUESTS": int(os.getenv("TENEO_TARGET_REQUESTS", "50")),
     "DELAY_SECONDS":   float(os.getenv("TENEO_DELAY_SECONDS", "3")),
     "AGENT_ID":        os.getenv("TENEO_AGENT_ID", "crypto-tracker-ai-v2"),
@@ -161,8 +162,9 @@ def print_banner():
 class TeneoBot:
     def __init__(self, config):
         self.cfg         = config
-        self.session_key = config["SESSION_KEY"]
-        self.wallet      = config["WALLET_ADDRESS"]
+        self.session_key   = config["SESSION_KEY"]
+        self.session_token = config["SESSION_TOKEN"]
+        self.wallet        = config["WALLET_ADDRESS"]
         self.target      = config["TARGET_REQUESTS"]
         self.delay       = config["DELAY_SECONDS"]
         self.agent_id    = config["AGENT_ID"] or "crypto-tracker-ai-v2"
@@ -184,28 +186,63 @@ class TeneoBot:
         )
         log_ok("Connected!")
 
-        # Tunggu welcome message — server kirim list agents
-        try:
-            raw  = await asyncio.wait_for(self.ws.recv(), timeout=10)
-            data = json.loads(raw)
-            if data.get("type") == "agents":
-                agents = data.get("data", [])
-                log_ok(f"Server: {len(agents)} agent(s) available")
+        # Handle auth + welcome message loop
+        authed   = False
+        deadline = time.time() + 20
+        while time.time() < deadline:
+            try:
+                raw  = await asyncio.wait_for(self.ws.recv(), timeout=10)
+                data = json.loads(raw)
+                t    = data.get("type", "")
 
-                if not self.agent_id:
-                    self.agent_id = self._pick_agent(agents)
+                # Step 1: Server minta auth
+                if t == "auth_required":
+                    log_info("Auth required — sending check_cached_auth...")
+                    auth_msg = {
+                        "type": "check_cached_auth",
+                        "data": {
+                            "address":        self.wallet,
+                            "platform":       "community",
+                            "request_source": "console",
+                            "session_token":  self.session_token,
+                        },
+                    }
+                    await self.ws.send(json.dumps(auth_msg))
+                    continue
 
-                for a in agents:
-                    if a.get("id") == self.agent_id:
-                        rooms = a.get("rooms", [])
-                        if rooms:
-                            self.room_id = rooms[0]
-                        break
+                # Step 2: Auth berhasil
+                if t == "auth":
+                    log_ok(f"Auth OK: {data.get('content', '')[:50]}")
+                    authed = True
+                    # Ambil room dari auth response
+                    auth_data     = data.get("data", {})
+                    private_rooms = auth_data.get("private_rooms", [])
+                    if private_rooms and not self.room_id:
+                        self.room_id = private_rooms[0].get("id")
+                    continue
 
-                log_info(f"Agent  : {Fore.YELLOW}{self.agent_id}")
-                log_info(f"Room   : {self.room_id or 'none'}")
-        except asyncio.TimeoutError:
-            log_warn("No welcome message, continuing...")
+                # Step 3: Server kirim list agents (setelah auth)
+                if t == "agents":
+                    agents = data.get("data", [])
+                    log_ok(f"Server: {len(agents)} agent(s) available")
+                    if not self.agent_id:
+                        self.agent_id = self._pick_agent(agents)
+                    for a in agents:
+                        if a.get("id") == self.agent_id:
+                            rooms = a.get("rooms", [])
+                            if rooms and not self.room_id:
+                                self.room_id = rooms[0]
+                            break
+                    break  # selesai setup
+
+            except asyncio.TimeoutError:
+                break
+
+        if not authed:
+            log_warn("Auth belum selesai — cek TENEO_SESSION_TOKEN di .env")
+
+        log_info(f"Agent  : {Fore.YELLOW}{self.agent_id}")
+        log_info(f"Room   : {self.room_id or 'none'}")
 
     def _pick_agent(self, agents):
         online = {a.get("id") for a in agents if a.get("status") == "online"}
