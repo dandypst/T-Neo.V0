@@ -295,9 +295,16 @@ class TeneoBot:
                 if t in ("ping", "pong", "heartbeat", "agents"):
                     continue
 
+                if t == "task_quote":
+                    log_ok(f"[2/3] Got task_quote — full data: {json.dumps(data)[:400]}")
+                    payment_token = data.get("payment")
+                    task_id       = (data.get("data") or {}).get("task_id") or data.get("task_id")
+                    server_req_id = data.get("request_id")
+                    break
+
                 if t == "confirm_task":
                     payment_token = data.get("payment")
-                    task_id       = data.get("data", {}).get("task_id")
+                    task_id       = (data.get("data") or {}).get("task_id") or data.get("task_id")
                     server_req_id = data.get("request_id")
                     log_ok(f"[2/3] Got confirm_task — task_id={task_id}")
                     break
@@ -321,7 +328,7 @@ class TeneoBot:
             "request_id": server_req_id,
             "timestamp":  now_iso(),
         }
-
+        log_res(f"[3/3] Sending confirm_task: task_id={task_id} payment={'yes' if payment_token else 'NO'}")
         await self.ws.send(json.dumps(confirm_msg))
         log_res(f"[3/3] confirm_task sent — waiting result...")
 
