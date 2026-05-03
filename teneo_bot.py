@@ -57,7 +57,7 @@ DEFAULT_CONFIG = {
     "WALLET_ADDRESS":  os.getenv("TENEO_WALLET_ADDRESS", ""),
     "TARGET_REQUESTS": int(os.getenv("TENEO_TARGET_REQUESTS", "50")),
     "DELAY_SECONDS":   float(os.getenv("TENEO_DELAY_SECONDS", "3")),
-    "AGENT_ID":        os.getenv("TENEO_AGENT_ID", "crypto-tracker-ai-v2"),
+    "AGENT_ID":        os.getenv("TENEO_AGENT_ID", "amazon"),
     "NETWORK":         os.getenv("TENEO_NETWORK", "eip155:3338"),
 }
 
@@ -75,6 +75,10 @@ AGENT_COMMANDS = {
         "analyze BTC", "analyze ETH", "analyze SOL", "analyze BNB", "analyze AVAX",
         "analyze PEAQ", "analyze ARB", "analyze OP", "analyze LINK", "analyze MATIC",
         "analyze SUI", "analyze DOT", "analyze ADA", "analyze XRP", "analyze DOGE",
+    ],
+    "amazon": [
+        "help", "help", "help", "help", "help",
+        "help", "help", "help", "help", "help",
     ],
     "trading-knowledge-agent": [
         "What is DCA?", "Explain RSI.", "What is MACD?",
@@ -398,8 +402,7 @@ class TeneoBot:
           4. Tunggu result/response
         """
         req_id        = gen_req_id()
-        display_name  = AGENT_DISPLAY_NAMES.get(self.agent_id, self.agent_id)
-        content       = f"@{display_name} {command}"
+        content       = f"@{self.agent_id} {command}"
         task_id       = None
         payment_token = None
         server_req_id = None
