@@ -57,50 +57,174 @@ DEFAULT_CONFIG = {
     "WALLET_ADDRESS":  os.getenv("TENEO_WALLET_ADDRESS", ""),
     "TARGET_REQUESTS": int(os.getenv("TENEO_TARGET_REQUESTS", "50")),
     "DELAY_SECONDS":   float(os.getenv("TENEO_DELAY_SECONDS", "3")),
-    "AGENT_ID":        os.getenv("TENEO_AGENT_ID", "amazon"),
+    "AGENT_ID":        os.getenv("TENEO_AGENT_ID", ""),
     "NETWORK":         os.getenv("TENEO_NETWORK", "eip155:3338"),
 }
 
-KNOWN_AGENTS = [
-    "crypto-tracker-ai-v2",
-    "trading-knowledge-agent",
-    "gas-sniper-agent",
-    "amazon",
-    "x-agent-enterprise-v2",
-]
+# ─── AGENT CATALOG ─────────────────────────────────────────────────────────────
+# Format: { agent_id: { "name": str, "commands": [ {"cmd": str, "price": float, "args": str} ] } }
 
-# Command murah per agent
-AGENT_COMMANDS = {
-    "crypto-tracker-ai-v2": [
-        "analyze BTC", "analyze ETH", "analyze SOL", "analyze BNB", "analyze AVAX",
-        "analyze PEAQ", "analyze ARB", "analyze OP", "analyze LINK", "analyze MATIC",
-        "analyze SUI", "analyze DOT", "analyze ADA", "analyze XRP", "analyze DOGE",
-    ],
-    "amazon": [
-        "help", "help", "help", "help", "help",
-        "help", "help", "help", "help", "help",
-    ],
-    "trading-knowledge-agent": [
-        "What is DCA?", "Explain RSI.", "What is MACD?",
-        "Explain bollinger bands.", "What is a stop loss?",
-        "What is liquidity?", "What is slippage?",
-    ],
-    "x-agent-enterprise-v2": [
-        "user elonmusk", "user VitalikButerin", "user cz_binance",
-        "user naval", "user balajis",
-    ],
-    "default": [
-        "price BTC", "price ETH", "price SOL", "price BNB", "price AVAX",
-    ],
+AGENT_CATALOG = {
+    "amazon": {
+        "name": "Amazon",
+        "commands": [
+            {"cmd": "help",    "price": 0.0,    "args": ""},
+            {"cmd": "reviews", "price": 0.001,  "args": "B08N5WRWNW amazon USD"},
+            {"cmd": "product", "price": 0.0025, "args": "B08N5WRWNW amazon"},
+            {"cmd": "search",  "price": 0.0025, "args": "laptop 1 amazon USD"},
+        ],
+    },
+    "gas-sniper-agent": {
+        "name": "Gas War Sniper",
+        "commands": [
+            {"cmd": "networks",   "price": 0.0,   "args": ""},
+            {"cmd": "thresholds", "price": 0.001, "args": ""},
+            {"cmd": "explain",    "price": 0.001, "args": ""},
+            {"cmd": "examples",   "price": 0.001, "args": ""},
+            {"cmd": "help",       "price": 0.001, "args": ""},
+            {"cmd": "stop",       "price": 0.001, "args": ""},
+            {"cmd": "gas",        "price": 0.005, "args": ""},
+            {"cmd": "block",      "price": 0.005, "args": ""},
+            {"cmd": "status",     "price": 0.005, "args": ""},
+            {"cmd": "history",    "price": 0.005, "args": ""},
+        ],
+    },
+    "crypto-tracker-ai-v2": {
+        "name": "Crypto Tracker AI V2",
+        "commands": [
+            {"cmd": "analyze",        "price": 0.01, "args": "BTC"},
+            {"cmd": "convert",        "price": 0.01, "args": "1 BTC USD"},
+            {"cmd": "news",           "price": 0.01, "args": "BTC"},
+            {"cmd": "gpt_analyze",    "price": 0.01, "args": "BTC"},
+            {"cmd": "crypto_tracker", "price": 0.01, "args": "BTC"},
+            {"cmd": "events",         "price": 0.01, "args": "bitcoin"},
+        ],
+    },
 }
 
-AGENT_DISPLAY_NAMES = {
-    "crypto-tracker-ai-v2":    "Crypto Tracker AI V2",
-    "trading-knowledge-agent": "Trading Agent",
-    "gas-sniper-agent":        "Gas War Sniper",
-    "amazon":                  "Amazon",
-    "x-agent-enterprise-v2":  "X Platform Agent",
-}
+def select_agent_interactive() -> str:
+    """Tampilkan menu interaktif untuk pilih agent."""
+    agents = list(AGENT_CATALOG.items())
+
+    print(f"\n{Fore.GREEN}{chr(9552)*52}{Style.RESET_ALL}")
+    print(f"{Fore.YELLOW}  PILIH AGENT{Style.RESET_ALL}")
+    print(f"{Fore.GREEN}{'═'*52}{Style.RESET_ALL}")
+
+    for i, (agent_id, info) in enumerate(agents, 1):
+        cmds      = sorted(info["commands"], key=lambda x: x["price"])
+        cheapest  = cmds[0]
+        cheap_cmd = f"{cheapest['cmd']} {cheapest['args']}".strip()
+        price_str = f"FREE" if cheapest["price"] == 0 else f"${cheapest['price']:.4f}/req"
+        print(f"  {Fore.CYAN}[{i}]{Style.RESET_ALL} {Fore.WHITE}{info['name']:<25}{Style.RESET_ALL} "
+              f"{Fore.GREEN}{price_str:<14}{Style.RESET_ALL} "
+              f"{Fore.YELLOW}cmd: {cheap_cmd}{Style.RESET_ALL}")
+
+    print(f"{Fore.GREEN}{chr(9552)*52}{Style.RESET_ALL}\n")
+
+    while True:
+        try:
+            choice = input(f"  {Fore.CYAN}Pilih agent [1-{len(agents)}]: {Style.RESET_ALL}").strip()
+            idx    = int(choice) - 1
+            if 0 <= idx < len(agents):
+                agent_id = agents[idx][0]
+                name     = agents[idx][1]["name"]
+                print(f"\n  {Fore.GREEN}✓ Agent dipilih: {name}{Style.RESET_ALL}\n")
+                return agent_id
+            print(f"  {Fore.RED}Pilihan tidak valid. Masukkan 1-{len(agents)}{Style.RESET_ALL}")
+        except (ValueError, KeyboardInterrupt):
+            print(f"\n  {Fore.YELLOW}Menggunakan agent default: Amazon{Style.RESET_ALL}\n")
+            return "amazon"
+
+def select_requests_interactive() -> int:
+    """Tanya jumlah requests."""
+    print(f"  {Fore.CYAN}Berapa requests yang ingin dijalankan? (25-100){Style.RESET_ALL}")
+    while True:
+        try:
+            val = input(f"  {Fore.CYAN}Jumlah requests [default 50]: {Style.RESET_ALL}").strip()
+            if val == "":
+                return 50
+            n = int(val)
+            if 1 <= n <= 100:
+                return n
+            print(f"  {Fore.RED}Masukkan angka antara 1-100{Style.RESET_ALL}")
+        except (ValueError, KeyboardInterrupt):
+            return 50
+
+def get_cheapest_command(agent_id: str) -> str:
+    """Ambil command termurah dari agent."""
+    catalog = AGENT_CATALOG.get(agent_id)
+    if not catalog:
+        return "help"
+    cmds = sorted(catalog["commands"], key=lambda x: x["price"])
+    cheapest = cmds[0]
+    if cheapest["args"]:
+        return f"{cheapest['cmd']} {cheapest['args']}"
+    return cheapest["cmd"]
+
+def get_command_list(agent_id: str) -> list:
+    """Ambil list commands untuk bot loop — cycle command termurah."""
+    catalog = AGENT_CATALOG.get(agent_id)
+    if not catalog:
+        return ["help"]
+    cmds = sorted(catalog["commands"], key=lambda x: x["price"])
+    cheapest_price = cmds[0]["price"]
+    # Pakai semua command dengan harga sama (termurah), variasikan args
+    cheapest_cmds = [c for c in cmds if c["price"] == cheapest_price]
+    result = []
+    # Variasikan supaya tidak spam command sama
+    if agent_id == "crypto-tracker-ai-v2":
+        tokens = ["BTC","ETH","SOL","BNB","AVAX","PEAQ","ARB","OP","LINK","MATIC","SUI","DOT","ADA","XRP","DOGE"]
+        base   = cheapest_cmds[0]["cmd"]
+        result = [f"{base} {t}" for t in tokens]
+    elif agent_id == "amazon":
+        for c in cheapest_cmds:
+            full = f"{c['cmd']} {c['args']}".strip()
+            result.extend([full] * 5)
+    else:
+        for c in cheapest_cmds:
+            full = f"{c['cmd']} {c['args']}".strip()
+            result.extend([full] * 3)
+    return result if result else ["help"]
+
+def select_agent_interactive() -> str:
+    """Tampilkan menu interaktif pilih agent."""
+    agents = list(AGENT_CATALOG.items())
+
+    print(f"\n{Fore.GREEN}{'═'*54}{Style.RESET_ALL}")
+    print(f"{Fore.YELLOW}  Pilih Agent yang ingin dijalankan:{Style.RESET_ALL}")
+    print(f"{Fore.GREEN}{'═'*54}{Style.RESET_ALL}")
+
+    for i, (agent_id, info) in enumerate(agents, 1):
+        cheapest = sorted(info["commands"], key=lambda x: x["price"])[0]
+        price_str = f"{cheapest['price']:.4f} USDC" if cheapest["price"] > 0 else "FREE"
+        price_color = Fore.GREEN if cheapest["price"] == 0 else Fore.YELLOW
+        print(f"  {Fore.CYAN}[{i}]{Style.RESET_ALL} {info['name']:<25} "
+              f"cheapest: {price_color}{price_str}{Style.RESET_ALL}")
+
+    print(f"\n  {Fore.CYAN}[0]{Style.RESET_ALL} Keluar")
+    print(f"{Fore.GREEN}{'═'*54}{Style.RESET_ALL}")
+
+    while True:
+        try:
+            choice = input(f"\n{Fore.YELLOW}  Pilih [1-{len(agents)}]: {Style.RESET_ALL}").strip()
+            if choice == "0":
+                print("Keluar.")
+                sys.exit(0)
+            idx = int(choice) - 1
+            if 0 <= idx < len(agents):
+                agent_id = agents[idx][0]
+                info     = agents[idx][1]
+                cheapest = sorted(info["commands"], key=lambda x: x["price"])[0]
+
+                print(f"\n{Fore.GREEN}  ✓ Agent   : {info['name']}{Style.RESET_ALL}")
+                print(f"  {Fore.CYAN}  Command  : {get_cheapest_command(agent_id)}")
+                price_str = f"{cheapest['price']:.4f} USDC/req" if cheapest["price"] > 0 else "FREE"
+                print(f"  {Fore.CYAN}  Harga    : {Fore.YELLOW}{price_str}{Style.RESET_ALL}\n")
+                return agent_id
+            else:
+                print(f"  {Fore.RED}Pilihan tidak valid.{Style.RESET_ALL}")
+        except (ValueError, EOFError):
+            print(f"  {Fore.RED}Input tidak valid.{Style.RESET_ALL}")
 
 # ─── HELPERS ────────────────────────────────────────────────────────────────────
 
@@ -550,10 +674,28 @@ class TeneoBot:
             log_err("TENEO_WALLET_ADDRESS diperlukan untuk room_id")
             sys.exit(1)
 
+        # Pilih agent interaktif jika belum diset via --agent atau .env
+        if not self.agent_id:
+            self.agent_id = select_agent_interactive()
+
+        # Tanya jumlah requests jika tidak ada --requests dan tidak ada env
+        if self.target == 50 and not os.getenv("TENEO_TARGET_REQUESTS"):
+            self.target = select_requests_interactive()
+
+        # Info command termurah
+        catalog    = AGENT_CATALOG.get(self.agent_id, {})
+        cmds       = sorted(catalog.get("commands", []), key=lambda x: x["price"])
+        cheapest   = cmds[0] if cmds else {"cmd": "help", "price": 0.0, "args": ""}
+        cheap_cmd  = f"{cheapest['cmd']} {cheapest['args']}".strip()
+        price_str  = "FREE" if cheapest["price"] == 0 else f"${cheapest['price']:.4f}/req"
+        total_cost = cheapest["price"] * self.target
+
         log_info("Starting Teneo Agent Bot...")
         print(f"  {Fore.CYAN}Wallet    {Fore.WHITE}{self.wallet[:10]}...{self.wallet[-6:]}")
-        print(f"  {Fore.CYAN}Agent     {Fore.YELLOW}{self.agent_id}")
+        print(f"  {Fore.CYAN}Agent     {Fore.YELLOW}{catalog.get('name', self.agent_id)}")
+        print(f"  {Fore.CYAN}Command   {Fore.WHITE}{cheap_cmd}  {Fore.GREEN}({price_str})")
         print(f"  {Fore.CYAN}Target    {Fore.YELLOW}{self.target} requests")
+        print(f"  {Fore.CYAN}Est. Cost {Fore.WHITE}${total_cost:.4f} USDC")
         print(f"  {Fore.CYAN}Network   {Fore.WHITE}{self.network}\n")
 
         try:
@@ -564,7 +706,7 @@ class TeneoBot:
 
         log_info("Tekan Ctrl+C untuk berhenti.\n")
 
-        commands   = AGENT_COMMANDS.get(self.agent_id, AGENT_COMMANDS["default"])
+        commands   = get_command_list(self.agent_id)
         cmd_cycle  = 0
         consec_err = 0
 
