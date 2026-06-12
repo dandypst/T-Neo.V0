@@ -55,8 +55,8 @@ DEFAULT_CONFIG = {
     "SESSION_KEY":     os.getenv("TENEO_SESSION_KEY", ""),
     "SESSION_TOKEN":   os.getenv("TENEO_SESSION_TOKEN", ""),   # dari browser
     "WALLET_ADDRESS":  os.getenv("TENEO_WALLET_ADDRESS", ""),
-    "TARGET_REQUESTS": int(os.getenv("TENEO_TARGET_REQUESTS", "50")),
-    "DELAY_SECONDS":   float(os.getenv("TENEO_DELAY_SECONDS", "3")),
+    "TARGET_REQUESTS": int(os.getenv("TENEO_TARGET_REQUESTS") or "50"),
+    "DELAY_SECONDS":   float(os.getenv("TENEO_DELAY_SECONDS") or "3"),
     "AGENT_ID":        os.getenv("TENEO_AGENT_ID", ""),
     "NETWORK":         os.getenv("TENEO_NETWORK", "eip155:3338"),
 }
